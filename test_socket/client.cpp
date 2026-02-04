@@ -31,7 +31,7 @@ int main()
     // 2. Setup server address
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
-    // TODO: Fill in server_addr
+    //Fill in server_addr
     //   - sin_family
     //   - sin_port (8080)
     //   - sin_addr (127.0.0.1)
@@ -47,21 +47,23 @@ int main()
         return 1;
     }
     
-    // 4. Send message
-    // TODO: Call send() with "Hello from client!"
-    const char* message = "Hello from client";
-    send(client_fd, message, strlen(message), 0);
-    
-    // 5. Receive response
-    // TODO: Call recv() and print result
-    char buffer[1024] = {0};
-    ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
-    if (bytes_read > 0)
+    std::string message;
+    while (std::cout << "(send): ",(std::cin >> message), message != "quit")
     {
-        buffer[bytes_read] = '\0';  // Null terminate
-        std::cout << "Received: \n" << buffer << std::endl;
+        // 4. Send message
+        send(client_fd, message.c_str(), message.size(), 0);
+        
+        // 5. Receive response
+        char buffer[1024] = {0};
+        ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+        if (bytes_read > 0)
+        {
+            buffer[bytes_read] = '\0';  // Null terminate
+            std::cout << ">> " << buffer << std::endl;
+        }
     }
-    
+
+     
     // 6. Cleanup
     close(client_fd);
 

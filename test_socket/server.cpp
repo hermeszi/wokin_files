@@ -5,6 +5,7 @@
 #include <cstring>         // memset()
 #include <iostream>
 #include <vector>
+#include <poll.h>     // poll(), pollfd, POLLIN
 
 /*
 struct sockaddr_in
@@ -59,18 +60,38 @@ int main()
         return 1;
     }
 
+    // 4. Listen for connections
+    if (listen(server_fd, 3) < 0)
+    {
+        std::cerr << "Listen failed\n";
+        close(server_fd);
+        return 1;
+    }
+    
+    std::cout << "Server listening on port "<< PORT << "...\n";
+
     /*including poll*/
     std::vector<pollfd> fds;
+
     pollfd server_pollfd = {server_fd, POLLIN, 0};
     fds.push_back(server_pollfd);
 
-    while (true) {
-        poll(&fds[0], fds.size(), -1);
+    std::cout << "Server set-up for multiple clients...\n";
+
+    while (true)
+    {
+        int poll_count = poll(&fds[0], fds.size(), -1);
+        if (poll_count < 0)
+        {
+            std::cerr << "Poll error\n";
+            break;
+        }
         
         // Check each fd in the array
         for (size_t i = 0; i < fds.size(); i++)
         {
-            if (fds[i].revents & POLLIN) {
+            if (fds[i].revents & POLLIN)
+            {
                 if (fds[i].fd == server_fd)
                 {
                     // 5. Accept a connection
@@ -84,45 +105,42 @@ int main()
                         close(server_fd);
                         return 1;
                     }
+                    /*these are not saved?*/
                     char* client_ip = inet_ntoa(client_addr.sin_addr);  // Convert IP to string
                     int client_port = ntohs(client_addr.sin_port);      // Convert port to host order
                 
                     std::cout << "Client " << client_ip << ":" << client_port << " connected on fd " << client_fd << std::endl;
+                    pollfd client_pollfd = {client_fd, POLLIN, 0};
+                    fds.push_back(client_pollfd);
                 } 
                 else 
                 {
-                    // TODO: Handle client data
+                    // 6. Receive data
+                    char buffer[1024] = {0};
+                    ssize_t bytes_read = recv(fds[i].fd, buffer, sizeof(buffer) - 1, 0);
+                    if (bytes_read > 0)
+                    {
+                        buffer[bytes_read] = '\0';  // Null terminate
+                        std::cout << "Received[fd" << fds[i].fd << "]: "<<buffer << std::endl;
+                        
+                        // 7. Send response
+                        const char* response = "msg received\n";
+                        send(fds[i].fd, response, strlen(response), 0);
+                    }
+                    else
+                    {
+                        std::cout << fds[i].fd << " disconnected." << std::endl;
+                        close(fds[i].fd);
+                        fds.erase(fds.begin() + i);
+                        --i;
+                    }
                 }
             }
         }
     }
     
-    // 4. Listen for connections
-    if (listen(server_fd, 3) < 0)
-    {
-        std::cerr << "Listen failed\n";
-        close(server_fd);
-        return 1;
-    }
-    
-    std::cout << "Server listening on port "<< PORT << "...\n";
-    
-
-    // 6. Receive data
-    char buffer[1024] = {0};
-    ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
-    if (bytes_read > 0)
-    {
-        buffer[bytes_read] = '\0';  // Null terminate
-        std::cout << "Received: \n" << buffer << std::endl;
-        
-        // 7. Send response
-        const char* response = "Message received!";
-        send(client_fd, response, strlen(response), 0);
-    }
     
     // 8. Cleanup
-    close(client_fd);
     close(server_fd);
     std::cout << "Server closed\n";
     
