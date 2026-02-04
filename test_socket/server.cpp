@@ -4,6 +4,7 @@
 #include <unistd.h>        // close(), read(), write()
 #include <cstring>         // memset()
 #include <iostream>
+#include <vector>
 
 /*
 struct sockaddr_in
@@ -57,6 +58,44 @@ int main()
         std::cerr << "Bind failed\n";
         return 1;
     }
+
+    /*including poll*/
+    std::vector<pollfd> fds;
+    pollfd server_pollfd = {server_fd, POLLIN, 0};
+    fds.push_back(server_pollfd);
+
+    while (true) {
+        poll(&fds[0], fds.size(), -1);
+        
+        // Check each fd in the array
+        for (size_t i = 0; i < fds.size(); i++)
+        {
+            if (fds[i].revents & POLLIN) {
+                if (fds[i].fd == server_fd)
+                {
+                    // 5. Accept a connection
+                    struct sockaddr_in client_addr;
+                    socklen_t client_len = sizeof(client_addr);
+                    
+                    int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+                    if (client_fd < 0)
+                    {
+                        std::cerr << "Accept failed\n";
+                        close(server_fd);
+                        return 1;
+                    }
+                    char* client_ip = inet_ntoa(client_addr.sin_addr);  // Convert IP to string
+                    int client_port = ntohs(client_addr.sin_port);      // Convert port to host order
+                
+                    std::cout << "Client " << client_ip << ":" << client_port << " connected on fd " << client_fd << std::endl;
+                } 
+                else 
+                {
+                    // TODO: Handle client data
+                }
+            }
+        }
+    }
     
     // 4. Listen for connections
     if (listen(server_fd, 3) < 0)
@@ -68,21 +107,6 @@ int main()
     
     std::cout << "Server listening on port "<< PORT << "...\n";
     
-    // 5. Accept a connection
-    struct sockaddr_in client_addr;
-    socklen_t client_len = sizeof(client_addr);
-    
-    int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
-    if (client_fd < 0)
-    {
-        std::cerr << "Accept failed\n";
-        close(server_fd);
-        return 1;
-    }
-    char* client_ip = inet_ntoa(client_addr.sin_addr);  // Convert IP to string
-    int client_port = ntohs(client_addr.sin_port);      // Convert port to host order
-
-    std::cout << "Client " << client_ip << ":" << client_port << " connected on fd " << client_fd << std::endl;
 
     // 6. Receive data
     char buffer[1024] = {0};
