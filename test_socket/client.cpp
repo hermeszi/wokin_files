@@ -31,7 +31,6 @@ int main()
     // 2. Setup server address
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
-    //Fill in server_addr
     //   - sin_family
     //   - sin_port (8080)
     //   - sin_addr (127.0.0.1)

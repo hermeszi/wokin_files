@@ -4,8 +4,11 @@
 #include <unistd.h>        // close(), read(), write()
 #include <cstring>         // memset()
 #include <iostream>
+#include <sstream>
 #include <vector>
 #include <poll.h>     // poll(), pollfd, POLLIN
+#include <signal.h>
+#include<errno.h>
 
 /*
 struct sockaddr_in
@@ -28,8 +31,55 @@ sin_port:    "Port 8080"
 
 #define PORT 8080
 
+bool g_running = true;
+
+void signal_handler(int signum)
+{
+    std::cout << signum << "Shutting down server..." << std::endl;
+    g_running = false;
+}
+
+static int accept_new_connection(int server_fd)
+{
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+                    
+    int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+    if (client_fd < 0)
+    {
+        std::cerr << "Accept failed\n";
+        close(server_fd);
+        return -1;
+    }
+    /*these are not saved, but they can be*/
+    char* client_ip = inet_ntoa(client_addr.sin_addr);  // Convert IP to string
+    int client_port = ntohs(client_addr.sin_port);      // Convert port to host order
+                
+    std::cout << "Client " << client_ip << ":" << client_port << " connected on fd " << client_fd << std::endl;
+
+    return (client_fd);
+}
+
+static void display_chat(char *buffer, int client_fd, int server_fd, std::vector<pollfd> &fds)
+{
+    std::stringstream ss; 
+    ss << "[fd" << client_fd << "]: " << buffer;
+    std::string message = ss.str();
+    std::cout << message << std::endl;
+
+    for (size_t i = 0; i < fds.size(); i++)
+    {
+        if (fds[i].fd != client_fd && fds[i].fd != server_fd )
+        {
+            send(fds[i].fd, message.c_str(), message.size(), 0);
+        }
+    }
+}
+
 int main()
 {
+    signal(SIGINT, signal_handler);
+
     // 1. Create socket
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1)
@@ -37,7 +87,6 @@ int main()
         std::cerr << "Socket creation failed\n";
         return 1;
     }
-    
     
     // 2. Setup address structure
     struct sockaddr_in address;
@@ -70,19 +119,26 @@ int main()
     
     std::cout << "Server listening on port "<< PORT << "...\n";
 
-    /*including poll*/
+    /*including poll for non-block*/
     std::vector<pollfd> fds;
+
+    pollfd stdin_pollfd = {0, POLLIN, 0};  // fd 0 = stdin
+    fds.push_back(stdin_pollfd);
 
     pollfd server_pollfd = {server_fd, POLLIN, 0};
     fds.push_back(server_pollfd);
-
     std::cout << "Server set-up for multiple clients...\n";
 
-    while (true)
+    while (g_running)
     {
         int poll_count = poll(&fds[0], fds.size(), -1);
         if (poll_count < 0)
         {
+            if (errno == EINTR)
+            {
+                // Signal interrupted poll - this is OK, just check running flag
+                continue;
+            }
             std::cerr << "Poll error\n";
             break;
         }
@@ -92,26 +148,36 @@ int main()
         {
             if (fds[i].revents & POLLIN)
             {
-                if (fds[i].fd == server_fd)
+                if (fds[i].fd == 0)
                 {
-                    // 5. Accept a connection
-                    struct sockaddr_in client_addr;
-                    socklen_t client_len = sizeof(client_addr);
-                    
-                    int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
-                    if (client_fd < 0)
+                    char server_input[1024] = {0};
+                    ssize_t bytes_read = read(fds[i].fd, server_input, sizeof(server_input) - 1);
+                    if (bytes_read > 0)
                     {
-                        std::cerr << "Accept failed\n";
-                        close(server_fd);
+                        server_input[bytes_read] = '\0';  // Null terminate
+                        display_chat(server_input, fds[i].fd, server_fd, fds);
+                        std::string server_command(server_input);
+                        if (server_command == "quit\n")
+                        {
+                            std::cout << "QUITING SERVER" << std::endl;
+                            g_running = false;
+                        }
+                    }
+                }
+                else if (fds[i].fd == server_fd)
+                {
+
+                    // 5. Accept a connection
+                    int new_client_fd = accept_new_connection(server_fd);
+                    if (new_client_fd < 0)
+                    {
                         return 1;
                     }
-                    /*these are not saved?*/
-                    char* client_ip = inet_ntoa(client_addr.sin_addr);  // Convert IP to string
-                    int client_port = ntohs(client_addr.sin_port);      // Convert port to host order
-                
-                    std::cout << "Client " << client_ip << ":" << client_port << " connected on fd " << client_fd << std::endl;
-                    pollfd client_pollfd = {client_fd, POLLIN, 0};
-                    fds.push_back(client_pollfd);
+                    else
+                    {
+                        pollfd client_pollfd = {new_client_fd, POLLIN, 0};
+                        fds.push_back(client_pollfd);
+                    }
                 } 
                 else 
                 {
@@ -121,11 +187,7 @@ int main()
                     if (bytes_read > 0)
                     {
                         buffer[bytes_read] = '\0';  // Null terminate
-                        std::cout << "Received[fd" << fds[i].fd << "]: "<<buffer << std::endl;
-                        
-                        // 7. Send response
-                        const char* response = "msg received\n";
-                        send(fds[i].fd, response, strlen(response), 0);
+                        display_chat(buffer, fds[i].fd, server_fd, fds);
                     }
                     else
                     {
@@ -138,9 +200,18 @@ int main()
             }
         }
     }
-    
-    
+
     // 8. Cleanup
+    char shutdown_msg[] = "Shutting down server...";
+    for (size_t i = 0; i < fds.size(); i++)
+    {
+        if (fds[i].fd != server_fd)
+        {
+            std::cout << "Sending shutdown to fd " << fds[i].fd << std::endl;
+            send(fds[i].fd, shutdown_msg, strlen(shutdown_msg), 0);
+            close(fds[i].fd);
+        }
+    }
     close(server_fd);
     std::cout << "Server closed\n";
     
